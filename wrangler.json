@@ -1,5 +1,5 @@
 {
-  "name": "proxy-github",
+  "name": "proxy",
   "main": "_worker.js",
   "compatibility_date": "2026-05-10"
 }
