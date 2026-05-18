@@ -1,42 +1,43 @@
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    
-    // 1. 智能识别：如果是 Git Push/Pull 流量，或者 API/Raw 流量，进行精准分流
-    let targetHost = 'github.com';
-    
-    if (url.pathname.startsWith('/repos/') || url.pathname.startsWith('/user/')) {
+    let targetHost = '';
+
+    // ================= 核心：多合一动态路由分发 =================
+    if (url.pathname.startsWith('/bot')) {
+      // 1. 如果路径是以 /bot 开头，说明是本地发来的 Telegram 推送
+      targetHost = 'api.telegram.org';
+    } else if (url.pathname.startsWith('/repos/') || url.pathname.startsWith('/user/')) {
+      // 2. 如果是 GitHub API 路径
       targetHost = 'api.github.com';
     } else if (url.pathname.includes('/raw/')) {
+      // 3. 如果是 GitHub Raw 原始文件路径
       targetHost = 'raw.githubusercontent.com';
-    } else if (url.pathname.endsWith('.git') || url.pathname.includes('.git/')) {
-      // 🏆 核心修复：Git 智能传输协议必须强制清洗并保证 Host 的绝对纯净
+    } else {
+      // 4. 默认其余全部归属 GitHub 主站
       targetHost = 'github.com';
     }
+    // ============================================================
 
+    // 拼装出真正的官方最终请求地址
     const targetUrl = 'https://' + targetHost + url.pathname + url.search;
 
-    // 2. 深度克隆并强制校准头部，带上标准的 Git 客户端伪装
+    // 深度克隆并强制校准头部，彻底清洗来源干扰
     const newHeaders = new Headers(request.headers);
     newHeaders.set('Host', targetHost);
     newHeaders.set('Referer', `https://${targetHost}`);
+    newHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
-    // 如果是 Git 流量，保留或伪装标准的 Git 代理 User-Agent
-    if (request.headers.get('User-Agent') && request.headers.get('User-Agent').includes('git')) {
-      newHeaders.set('User-Agent', request.headers.get('User-Agent'));
-    } else {
-      newHeaders.set('User-Agent', 'git/2.39.2 (git-allow-proxy)');
-    }
-    
+    // 针对 GitHub API 请求的特殊特权加固
     if (targetHost === 'api.github.com') {
       newHeaders.set('Accept', 'application/vnd.github+json');
       newHeaders.set('X-GitHub-Api-Version', '2022-11-28');
     }
 
-    // 3. 流式直通
+    // 移除 arrayBuffer 预装载，采用最高效的纯流式直通（ReadableStream）
     let body = null;
     if (request.method !== 'GET' && request.method !== 'HEAD') {
-      body = request.body;
+      body = request.body; 
     }
 
     try {
@@ -47,11 +48,14 @@ export default {
         redirect: 'follow'
       });
 
+      // 吐回响应并注入跨域头
       const modifiedResponse = new Response(response.body, response);
       modifiedResponse.headers.set('Access-Control-Allow-Origin', '*');
+      modifiedResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       return modifiedResponse;
+
     } catch (e) {
-      return new Response(`❌ GH Worker 云端代理故障: ${e.message}`, { status: 502 });
+      return new Response(`❌ 融合路由分发异常: ${e.message}`, { status: 502 });
     }
   }
-}
+};
