@@ -1,5 +1,5 @@
 {
-  "name": "proxy",
+  "name": "proxy-telegram",
   "main": "_worker.js",
   "compatibility_date": "2026-05-10"
 }
