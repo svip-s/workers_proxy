@@ -5,57 +5,70 @@ export default {
 
     // ================= 核心：多合一动态路由分发 =================
     if (url.pathname.startsWith('/bot')) {
-      // 1. 如果路径是以 /bot 开头，说明是本地发来的 Telegram 推送
       targetHost = 'api.telegram.org';
     } else if (url.pathname.startsWith('/repos/') || url.pathname.startsWith('/user/')) {
-      // 2. 如果是 GitHub API 路径
       targetHost = 'api.github.com';
     } else if (url.pathname.includes('/raw/')) {
-      // 3. 如果是 GitHub Raw 原始文件路径
       targetHost = 'raw.githubusercontent.com';
     } else {
-      // 4. 默认其余全部归属 GitHub 主站
       targetHost = 'github.com';
     }
     // ============================================================
 
-    // 拼装出真正的官方最终请求地址
     const targetUrl = 'https://' + targetHost + url.pathname + url.search;
 
-    // 深度克隆并强制校准头部，彻底清洗来源干扰
-    const newHeaders = new Headers(request.headers);
+    // 1. 深度清洗并重构 Headers，干掉可能导致 CF 误判的旧 Content-Length
+    const newHeaders = new Headers();
+    for (const [key, value] of request.headers.entries()) {
+      // 核心：强制放行身份校验、类型和 UA，让 CF 自动计算大网长度，防止死锁
+      if (key.toLowerCase() !== 'host' && key.toLowerCase() !== 'content-length') {
+        newHeaders.set(key, value);
+      }
+    }
     newHeaders.set('Host', targetHost);
     newHeaders.set('Referer', `https://${targetHost}`);
-    newHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
-    // 针对 GitHub API 请求的特殊特权加固
     if (targetHost === 'api.github.com') {
       newHeaders.set('Accept', 'application/vnd.github+json');
       newHeaders.set('X-GitHub-Api-Version', '2022-11-28');
     }
 
-    // 移除 arrayBuffer 预装载，采用最高效的纯流式直通（ReadableStream）
-    let body = null;
+    // 2. 彻底放弃脆弱的 stream 直通，改用 text/blob 载入，安全隔离
+    let requestBody = null;
     if (request.method !== 'GET' && request.method !== 'HEAD') {
-      body = request.body; 
+      requestBody = await request.blob(); 
     }
 
     try {
+      // 3. 核心 Fetch 动作
       const response = await fetch(targetUrl, {
         method: request.method,
         headers: newHeaders,
-        body: body,
+        body: requestBody,
         redirect: 'follow'
       });
 
-      // 吐回响应并注入跨域头
-      const modifiedResponse = new Response(response.body, response);
+      // 4. 读取回执内容，确保即便是报错也能完整吐回给本地脚本，绝不流失
+      const responseBody = await response.blob();
+
+      const modifiedResponse = new Response(responseBody, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers
+      });
+
+      // 注入跨域，确保双向通畅
       modifiedResponse.headers.set('Access-Control-Allow-Origin', '*');
       modifiedResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      modifiedResponse.headers.set('Access-Control-Allow-Headers', '*');
+
       return modifiedResponse;
 
     } catch (e) {
-      return new Response(`❌ 融合路由分发异常: ${e.message}`, { status: 502 });
+      return new Response(JSON.stringify({ error: "Worker 转发遭遇致命崩溃", details: e.message }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      });
     }
   }
-};
+}
