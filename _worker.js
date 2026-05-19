@@ -3,86 +3,58 @@ export default {
     const url = new URL(request.url);
     let targetHost = '';
 
-    // ================= 1. 多合一动态路由分发 =================
+    // ================= 核心：多合一动态路由分发 =================
     if (url.pathname.startsWith('/bot')) {
+      // 1. 如果路径是以 /bot 开头，说明是本地发来的 Telegram 推送
       targetHost = 'api.telegram.org';
     } else if (url.pathname.startsWith('/repos/') || url.pathname.startsWith('/user/')) {
+      // 2. 如果是 GitHub API 路径
       targetHost = 'api.github.com';
     } else if (url.pathname.includes('/raw/')) {
+      // 3. 如果是 GitHub Raw 原始文件路径
       targetHost = 'raw.githubusercontent.com';
     } else {
+      // 4. 默认其余全部归属 GitHub 主站
       targetHost = 'github.com';
     }
     // ============================================================
 
+    // 拼装出真正的官方最终请求地址
     const targetUrl = 'https://' + targetHost + url.pathname + url.search;
 
-    // 2. 克隆并重构请求头
-    const newHeaders = new Headers();
-    for (const [key, value] of request.headers.entries()) {
-      const k = key.toLowerCase();
-      if (!['host', 'content-length', 'accept-encoding', 'connection', 'keep-alive'].includes(k)) {
-        newHeaders.set(key, value);
-      }
-    }
-    
+    // 深度克隆并强制校准头部，彻底清洗来源干扰
+    const newHeaders = new Headers(request.headers);
     newHeaders.set('Host', targetHost);
     newHeaders.set('Referer', `https://${targetHost}`);
-    newHeaders.set('Connection', 'close'); // 显式宣告短连接，防止大网多命令连发长连接串线
     newHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
+    // 针对 GitHub API 请求的特殊特权加固
     if (targetHost === 'api.github.com') {
       newHeaders.set('Accept', 'application/vnd.github+json');
       newHeaders.set('X-GitHub-Api-Version', '2022-11-28');
     }
 
-    let requestBody = null;
+    let body = null;
     if (request.method !== 'GET' && request.method !== 'HEAD') {
-      requestBody = await request.arrayBuffer();
+      body = await request.arrayBuffer(); 
     }
 
     try {
       const response = await fetch(targetUrl, {
         method: request.method,
         headers: newHeaders,
-        body: requestBody,
+        body: body,
         redirect: 'follow'
       });
 
-      // 【核心加固逻辑】：如果是 API 请求，彻底放弃流直通，实施云端全量文本装载
-      if (targetHost === 'api.github.com' || targetHost === 'api.telegram.org') {
-        const responseText = await response.text();
-        
-        // 精准清洗：剔除原厂可能引发本地 curl 传输截断、混乱的编码头
-        const responseHeaders = new Headers();
-        for (const [key, value] of response.headers.entries()) {
-          const k = key.toLowerCase();
-          if (!['content-encoding', 'transfer-encoding', 'content-length', 'connection'].includes(k)) {
-            responseHeaders.set(key, value);
-          }
-        }
-        
-        responseHeaders.set('Connection', 'close');
-        responseHeaders.set('Content-Type', 'application/json; charset=utf-8');
-        responseHeaders.set('Access-Control-Allow-Origin', '*');
-
-        return new Response(responseText, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: responseHeaders
-        });
-      }
-
-      // 正常的非 API 大文件路由，继续保持最高效的流直通
+      // 吐回响应并注入跨域头
       const modifiedResponse = new Response(response.body, response);
       modifiedResponse.headers.set('Access-Control-Allow-Origin', '*');
+      modifiedResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       return modifiedResponse;
 
     } catch (e) {
-      return new Response(JSON.stringify({ error: "Proxy Exception", details: e.message }), {
-        status: 502,
-        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-      });
+      return new Response(`❌ 融合路由分发异常: ${e.message}`, { status: 502 });
     }
   }
-}
+};
