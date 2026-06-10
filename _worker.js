@@ -17,7 +17,7 @@ export default {
       // 4. 默认其余全部归属 GitHub 主站
       targetHost = 'github.com';
     }
-    // ============================================================
+    // =========================================================
 
     // 拼装出真正的官方最终请求地址
     const targetUrl = 'https://' + targetHost + url.pathname + url.search;
