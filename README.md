@@ -7,6 +7,3 @@
   - api.github.com
   - raw.githubusercontent.com
   - api.telegram.org
-
-
-1234567890
